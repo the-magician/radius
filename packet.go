@@ -9,7 +9,7 @@ import (
 )
 
 // MaxPacketLength is the maximum wire length of a RADIUS packet.
-const MaxPacketLength = 4095
+const MaxPacketLength = 4096
 
 // Packet is a RADIUS packet.
 type Packet struct {
@@ -35,7 +35,6 @@ func New(code Code, secret []byte) *Packet {
 		Code:       code,
 		Identifier: buff[0],
 		Secret:     secret,
-		Attributes: make(Attributes),
 	}
 	copy(packet.Authenticator[:], buff[1:])
 	return packet
@@ -49,11 +48,11 @@ func Parse(b, secret []byte) (*Packet, error) {
 	}
 
 	length := int(binary.BigEndian.Uint16(b[2:4]))
-	if length < 20 || length > MaxPacketLength || len(b) != length {
+	if length < 20 || length > MaxPacketLength || len(b) < length {
 		return nil, errors.New("radius: invalid packet length")
 	}
 
-	attrs, err := ParseAttributes(b[20:])
+	attrs, err := ParseAttributes(b[20:length])
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +74,6 @@ func (p *Packet) Response(code Code) *Packet {
 		Code:       code,
 		Identifier: p.Identifier,
 		Secret:     p.Secret,
-		Attributes: make(Attributes),
 	}
 	copy(q.Authenticator[:], p.Authenticator[:])
 	return q
@@ -85,18 +83,18 @@ func (p *Packet) Response(code Code) *Packet {
 // encoded packet is too long (due to its Attributes), or if the packet has an
 // unknown Code.
 func (p *Packet) Encode() ([]byte, error) {
-	attributesSize := p.Attributes.wireSize()
-	if attributesSize == -1 {
-		return nil, errors.New("invalid packet attribute length")
+	attributesLen, err := AttributesEncodedLen(p.Attributes)
+	if err != nil {
+		return nil, err
 	}
-	size := 20 + attributesSize
+	size := 20 + attributesLen
 	if size > MaxPacketLength {
 		return nil, errors.New("encoded packet is too long")
 	}
 
 	b := make([]byte, size)
 	b[0] = byte(p.Code)
-	b[1] = byte(p.Identifier)
+	b[1] = p.Identifier
 	binary.BigEndian.PutUint16(b[2:4], uint16(size))
 	p.Attributes.encodeTo(b[20:])
 
